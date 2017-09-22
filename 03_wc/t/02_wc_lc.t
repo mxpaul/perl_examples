@@ -21,7 +21,10 @@ sub table_tests_run {
 		croak 'need want hash' unless ref $case->{want} eq 'HASH';
 		my $desc = sprintf('%s when %s', $funcname, $case->{desc});
 		open my $f, '<', \$case->{input}[0] or croak "open input fd: $!";
+		my $old = $Word::Count::MAXREAD;
+		$Word::Count::MAXREAD = $case->{maxread} if $case->{maxread};
 		my $got = do {no strict 'refs'; &$funcname($f)};
+		$Word::Count::MAXREAD = $old;
 		close($f);
 		cmp_deeply($got, $case->{want}, $desc) or diag Dumper $got;
 	}
@@ -52,6 +55,11 @@ my @cases = (
 		input => ["line and word"],
 		want => {error => 0, lines => 1, words => 3,},
 	},
+	{ desc => '1 line, three words, read chunks size 10',
+		input => ["line and word"],
+		maxread => 10,
+		want => {error => 0, lines => 1, words => 3,},
+	},
 	{ desc => '2 line, three words',
 		input => ["line \nnew word"],
 		want => {error => 0, lines => 2, words => 3,},
@@ -79,6 +87,6 @@ my @cases = (
 );
 table_tests_run('ethalon_wc_from_fd',\@cases);
 table_tests_run('wc_from_fd',\@cases);
-table_tests_run('wc_from_fd_single_pass_slow',\@cases);
+table_tests_run('wc_from_fd_single_pass',\@cases);
 
 done_testing;
