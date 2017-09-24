@@ -16,12 +16,13 @@ my $conn_info = {
 	user     => 'pginserter',
 	password => '1etmein!',
 };
+my $pool_size = 10;
 
 my $work;
 my $reader; $reader = Pg::Import::Reader->new(
 	file_name        => $fname,
 	#read_limit_bytes => 10,
-	queue_limit      => 2,
+	queue_limit      => $pool_size + 10,
 	valid_line_re    => qr/(\d{1,30})\t([^\t]{0,200})\t([^\t\n]{1,4000})/,
 	cb_error  => sub {
 		my $err = shift;
@@ -36,7 +37,7 @@ my $reader; $reader = Pg::Import::Reader->new(
 my $pg_ready = 0;
 my $cf_reported = 0;
 my $pg; $pg = AnyEvent::PostgreSQL->new(
-		pool_size         => 10,
+		pool_size         => $pool_size,
 		conn_info         => $conn_info,
 		request_timeout   => 3,
 		#on_connect_first  => sub {
@@ -59,7 +60,7 @@ my $pg; $pg = AnyEvent::PostgreSQL->new(
 my $query_cnt = 0;
 $reader->{cb_matched_line} = $work = sub {
 	return unless $pg_ready;
-	while ($query_cnt < $pg->{pool_size} && (my $m = $reader->pop_line)) {
+	while (($query_cnt < $pool_size) && (my $m = $reader->pop_line)) {
 		$query_cnt ++;
 		$pg->push_query(
 			['INSERT INTO banners (banner_id, title, url) VALUES($1, $2, $3)', @{$m->{match}}],
