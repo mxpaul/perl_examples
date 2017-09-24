@@ -77,6 +77,7 @@ sub TearDown {
 	my $r; $r = Pg::Import::Reader->new(
 		file_name        => $state->{test_file},
 		read_limit_bytes => 3,
+		#queue_limit      => 1,
 		valid_line_re    => qr/(\d+)\t+([^\t]+)\t+([^\t\n]+)/,
 		cb_matched_line  => sub {
 			return unless $r;

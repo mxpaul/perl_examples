@@ -2,8 +2,8 @@ package Pg::Import::Reader;
 use Mouse;
 use v5.10;
 
-has file_name        => (is => 'rw', );
-#has queue_limit      => (is => 'rw', default => 10);
+has file_name        => (is => 'rw',);
+has queue_limit      => (is => 'rw', default => 10);
 has read_limit_bytes => (is => 'rw', default => (1<<17));
 has valid_line_re    => (is => 'rw', default => sub{qr/.*?/});
 has cb_matched_line  => (is => 'rw');
@@ -15,6 +15,7 @@ has _in_read         => (is=>'rw', default => 0);
 has _queue           => (is=>'rw', default => sub{ [] });
 has async_open       => (is=>'rw', default => sub{ \&aio_open });
 has async_read       => (is=>'rw', default => sub{ \&aio_read });
+has _eof_called      => (is => 'rw', default => 0);
 
 use Carp;
 use Data::Dumper;
@@ -29,21 +30,24 @@ sub finished { my $self = shift;
 sub pop_line { my $self = shift;
 	return shift @{$self->{_queue}};
 }
+sub push_line { my $self = shift;
+	return unshift @{$self->{_queue}}, $_[0];
+}
 
 sub read_more { my $self = shift;
-	return if $self->{_in_read} or $self->{eof};
+	return if $self->{_in_read} or $self->finished;
 	$self->{_in_read} = 1;
 	$self->read_fh(sub {
 		my $res = shift;
 		if ($res->{error}) {
 			$self->{_in_read} = 0;
-			$self->{cb_error}->($res->reason) if $self->{cb_error};
+			$self->{cb_error}->($res) if $self->{cb_error};
 		} else {
 			my $cnt = $self->process_input;
 			$self->{_in_read} = 0;
 			$self->{cb_matched_line}->($cnt) if $self->{cb_matched_line} && $cnt > 0;
 			if ($self->{eof}) {
-				$self->{cb_eof}->() if $self->{cb_eof};
+				$self->{cb_eof}->() if $self->{cb_eof} && !$self->{_eof_called}++;
 			} else {
 				$self->read_more unless $cnt > 0;
 			}
@@ -58,7 +62,7 @@ sub read_fh { my $self = shift;
 			if ($self->{fh} = shift) {
 				$self->read_fh($cb);
 			} else {
-				$cb->({error=>1, reason => "async_open: $!"});
+				$cb->({error=>1, fatal=> 1, reason => "async_open [$self->{file_name}]: $!"});
 			}
 		});
 		return;
@@ -72,12 +76,12 @@ sub read_fh { my $self = shift;
 		sub{
 			my $len = shift;
 			if (!defined $len) {
-				$cb->({error =>1, reason => "async_read $!"});
+				$cb->({error =>1, fatal => 1, reason => "async_read $!"});
 			} elsif ($len == 0) {
 				$self->{eof} = 1;
-				$cb->({error =>0});
+				$cb->({error =>0, fatal => 0});
 			} else {
-				$cb->({error =>0});
+				$cb->({error =>0, fatal => 0});
 			}
 		}
 	);
@@ -86,17 +90,18 @@ sub read_fh { my $self = shift;
 
 sub process_input { my $self = shift;
 	my $line_cnt = 0;
-	while (1) {
+	while (0 + @{$self->{_queue}} < $self->{queue_limit}) {
 		if (
-			(!$self->{eof} && $self->{_buf} =~ /\G^$self->{valid_line_re}\n/gcm) ||
+			($self->{_buf} =~ /\G^$self->{valid_line_re}\n/gcm) ||
 			($self->{eof} && $self->{_buf} =~ /\G^$self->{valid_line_re}\n?\z/gcm)
 		) {
 			$line_cnt++;
 			my $line = substr($self->{_buf}, $-[0], $+[0]-$-[0]);
 			my $matches = [map {substr($self->{_buf}, $-[$_], $+[$_]-$-[$_])} 1..$#{-}];
 			push @{$self->{_queue}}, {line => $line, match => $matches};
-		} elsif ($self->{_buf} =~ /\G^(.+?)\n/gcm) {
-			#diag "NON MATCH line";
+		} elsif ($self->{_buf} =~ /\G^(.*?)\n/gcm) {
+			#my $line = substr($self->{_buf}, $-[0], $+[0]-$-[0]);
+			#warn "[ERR] skip line $line";
 		} else {
 			last;
 		}
